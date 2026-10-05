@@ -1,40 +1,42 @@
-const { createClient } = require("@supabase/supabase-js");
+import { getStore } from "@netlify/blobs";
 
-const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-const json = (status, body) => ({
-  statusCode: status,
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
+export const config = { path: "/api/todos" };
 
-exports.handler = async (event) => {
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
+export default async (req) => {
   try {
-    const body = event.body ? JSON.parse(event.body) : {};
+    const store = getStore("todos");
+    const list = (await store.get("list", { type: "json" })) || [];
+    const save = (l) => store.setJSON("list", l);
+    const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await req.json() : {};
 
-    if (event.httpMethod === "GET") {
-      const { data, error } = await db.from("todos").select("*").order("id", { ascending: false });
-      if (error) throw error;
-      return json(200, data);
-    }
-    if (event.httpMethod === "POST") {
+    if (req.method === "GET") return json(list);
+
+    if (req.method === "POST") {
       const title = (body.title || "").trim();
-      if (!title) return json(400, { error: "Title is required" });
-      const { data, error } = await db.from("todos").insert({ title }).select().single();
-      if (error) throw error;
-      return json(201, data);
+      if (!title) return json({ error: "Title is required" }, 400);
+      const todo = { id: Date.now(), title, done: false };
+      await save([todo, ...list]);
+      return json(todo, 201);
     }
-    if (event.httpMethod === "PATCH") {
-      const { data, error } = await db.from("todos").update({ done: !!body.done }).eq("id", body.id).select().single();
-      if (error) throw error;
-      return json(200, data);
+
+    if (req.method === "PATCH") {
+      await save(list.map((t) => (t.id === body.id ? { ...t, done: !!body.done } : t)));
+      return json({ ok: true });
     }
-    if (event.httpMethod === "DELETE") {
-      const { error } = await db.from("todos").delete().eq("id", body.id);
-      if (error) throw error;
-      return json(200, { ok: true });
+
+    if (req.method === "DELETE") {
+      await save(list.filter((t) => t.id !== body.id));
+      return json({ ok: true });
     }
-    return json(405, { error: "Method not allowed" });
+
+    return json({ error: "Method not allowed" }, 405);
   } catch (e) {
-    return json(500, { error: e.message });
+    return json({ error: e.message }, 500);
   }
 };
